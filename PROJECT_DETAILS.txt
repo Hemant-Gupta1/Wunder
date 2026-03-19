@@ -1,0 +1,1026 @@
+================================================================================
+                        WUNDER - MARKET STATE FORECASTING MODEL
+                           COMPLETE PROJECT DOCUMENTATION
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1.  PROJECT OVERVIEW
+2.  WHAT THE PROJECT DOES (HIGH-LEVEL)
+3.  HOW IT WORKS (DETAILED EXPLANATION)
+4.  PROJECT FOLDER STRUCTURE
+5.  DETAILED FILE-BY-FILE BREAKDOWN
+6.  DATA FLOW: STEP-BY-STEP WALKTHROUGH
+7.  MODEL ARCHITECTURE DEEP DIVE
+8.  EVALUATION METRIC
+9.  HOW TO RUN THE PROJECT
+10. TECH STACK & DEPENDENCIES
+11. KEY CONCEPTS TO UNDERSTAND
+12. THE DATASET: WHAT IT LOOKS LIKE
+13. THE PROBLEM STATEMENT
+14. THE SOLUTION: WHAT WAS IMPLEMENTED & WHY
+
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+Project Name   : Wunder - Market State Forecasting Model
+Type           : Machine Learning / Time-Series Prediction (Competition)
+Language       : Python
+ML Framework   : PyTorch
+Dataset Source : https://www.kaggle.com/datasets/biradar1913/wunder
+Goal           : Predict the NEXT market state vector given a sequence of
+                 previous market states.
+
+In simple terms:
+    Imagine the stock market produces a "snapshot" of 32 numbers every second.
+    These 32 numbers together represent the current "state" of the market.
+    The goal of this project is to build a model that, after seeing a
+    sequence of these snapshots, can predict what the NEXT snapshot (the
+    next 32 numbers) will look like.
+
+
+================================================================================
+2. WHAT THE PROJECT DOES (HIGH-LEVEL)
+================================================================================
+
+This project solves a SEQUENCE PREDICTION problem:
+
+    Input:  A stream of market state vectors (each with 32 features),
+            arriving one at a time, grouped into independent sequences.
+
+    Output: When requested, predict the NEXT state vector (32 features).
+
+The core idea:
+    - Market data comes in "sequences". Each sequence is independent
+      (like separate conversations — you don't carry context from one
+      to the next).
+    - Within a sequence, each new state depends on the history of
+      previous states.
+    - The model uses a GRU (Gated Recurrent Unit) neural network, which
+      is a type of RNN (Recurrent Neural Network) that is excellent at
+      "remembering" patterns in sequential data.
+    - The model processes data ONE STEP AT A TIME (not in batches),
+      maintaining an internal hidden state that acts as its "memory".
+    - When a new sequence starts, this memory is wiped clean (reset).
+
+Key challenge:
+    The model must be STATEFUL — it must maintain and manage its own
+    memory across calls, resetting when sequences change, and only
+    producing predictions when explicitly asked.
+
+
+================================================================================
+3. HOW IT WORKS (DETAILED EXPLANATION)
+================================================================================
+
+Step 1: DATA ARRIVES ONE ROW AT A TIME
+    - Each row (called a "DataPoint") contains:
+        * seq_ix          : Which sequence this row belongs to (integer ID)
+        * step_in_seq     : The position of this row within its sequence (0, 1, 2, ...)
+        * need_prediction : A boolean flag — should the model predict right now?
+        * state           : A numpy array of 32 floating-point numbers = the market state
+
+Step 2: THE MODEL CHECKS IF THIS IS A NEW SEQUENCE
+    - If seq_ix has changed or step_in_seq is 0, the model creates a fresh
+      hidden state (all zeros). This is like "starting fresh" — no memory
+      of previous sequences.
+
+Step 3: PREPROCESSING
+    - The raw state vector (32 numbers) is SCALED using a StandardScaler.
+    - StandardScaler transforms each feature so that it has mean=0 and
+      standard deviation=1. This is critical because neural networks train
+      much better when input values are normalized.
+    - The scaler was "fitted" (learned the mean and std) during training and
+      is saved as "scaler.joblib". At inference time, we load it and use
+      the same transformation.
+
+Step 4: THE GRU PROCESSES THE INPUT
+    - The scaled state is converted to a PyTorch tensor of shape (1, 1, 32):
+        * 1 = batch size (we process one sample at a time)
+        * 1 = sequence length (one timestep at a time)
+        * 32 = number of features
+    - This tensor, along with the current hidden state, is fed into the GRU.
+    - The GRU produces:
+        * An output tensor     : The GRU's interpretation of this timestep
+        * A new hidden state   : Updated memory incorporating this new input
+    - The new hidden state is stored for use in the next call.
+
+Step 5: PREDICTION (ONLY IF REQUESTED)
+    - If need_prediction is False: return None (but still update the hidden state)
+    - If need_prediction is True:
+        * The GRU output is passed through a Linear layer to produce 32 numbers
+        * These 32 numbers are in "scaled space", so we apply inverse_transform()
+          using the same scaler to convert them back to the original data scale
+        * Return this as a 1D numpy array of shape (32,)
+
+Step 6: SCORING
+    - The competition scorer (ScorerStepByStep in utils.py) collects all
+      predictions and their corresponding actual next states.
+    - It calculates the R² (R-squared) score for each of the 32 features.
+    - The final score is the MEAN of all 32 R² scores.
+
+
+================================================================================
+4. PROJECT FOLDER STRUCTURE
+================================================================================
+
+Wunder/                              <-- Root project directory
+│
+├── README.md                        <-- Main project documentation (Markdown)
+├── utils.py                         <-- Shared utilities: DataPoint class, Scorer, metrics
+├── PROJECT_DETAILS.txt              <-- This file (comprehensive documentation)
+│
+├── submission/                      <-- THE ACTUAL SUBMISSION (final solution)
+│   ├── solution.py                  <-- Main solution code (PredictionModel class with GRU)
+│   ├── gru_model.pth                <-- Trained GRU model weights (PyTorch state dict, ~4MB)
+│   └── scaler.joblib                <-- Fitted StandardScaler (serialized with joblib, ~1KB)
+│
+└── examples/                        <-- Example/reference solutions
+    └── simple/                      <-- A simple baseline example
+        ├── solution.py              <-- Simple moving-average based PredictionModel
+        └── README.md                <-- Explanation of the simple example
+
+
+================================================================================
+5. DETAILED FILE-BY-FILE BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: README.md  (Root Directory)
+Size: ~7.7 KB | Lines: 154
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    This is the main documentation file for the project written in Markdown.
+    It covers:
+      - Project goal description
+      - Link to the Kaggle dataset
+      - Detailed specification of the PredictionModel class (what __init__ and
+        predict must do)
+      - A template/skeleton of the solution.py code
+      - Model architecture description (GRU with hyperparameters)
+      - Evaluation metric (R² score formula)
+      - Recommended workflow for developing a solution
+
+    WHY IT EXISTS:
+    It serves as the competition brief / project specification. Anyone reading
+    this file will understand what needs to be built, the rules, and the
+    expected output format.
+
+
+--------------------------------------------------------------------------------
+FILE: utils.py  (Root Directory)
+Size: ~2.5 KB | Lines: 77
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    This file provides three key components used by the scoring system:
+
+    1. DataPoint (dataclass, lines 8-14):
+       A Python dataclass that represents a single row of data. It has four fields:
+         - seq_ix (int)          : Sequence ID — identifies which sequence the row belongs to
+         - step_in_seq (int)     : Step number within the sequence (0-indexed)
+         - need_prediction (bool): Whether the model must return a prediction for this row
+         - state (np.ndarray)    : The market state vector (32 floating-point features)
+
+    2. PredictionModel (class, lines 17-20):
+       A DUMMY baseline model. Its predict() method simply returns the current state
+       as the prediction (i.e., it predicts "nothing will change"). This serves as a
+       minimal example and a fallback.
+
+    3. ScorerStepByStep (class, lines 23-76):
+       The evaluation engine. This is the most important class in this file.
+
+       - __init__(self, dataset_path):
+           Loads a .parquet dataset file using pandas. Determines the number of
+           features (total columns minus 3 metadata columns: seq_ix, step_in_seq,
+           need_prediction). Stores feature names.
+
+       - score(self, model):
+           The main evaluation loop. Iterates through EVERY row of the dataset:
+             * Creates a DataPoint from each row
+             * Calls model.predict(data_point) to get the model's prediction
+             * Uses check_prediction() to validate the prediction format
+             * Collects predictions and their corresponding ACTUAL next states
+             * After processing all rows, calls calc_metrics() to compute scores
+           Returns a dictionary of R² scores.
+
+       - check_prediction(self, data_point, prediction):
+           Validates that:
+             * If need_prediction is False, the model returned None
+             * If need_prediction is True, the model returned a numpy array
+             * The prediction array has the correct number of features
+           Raises ValueError if any check fails.
+
+       - calc_metrics(self, predictions, targets):
+           Computes the R² (R-squared / coefficient of determination) score for
+           each feature independently using sklearn's r2_score function.
+           Also computes the mean R² across all features as the final score.
+
+    DEPENDENCIES:
+    numpy, pandas, tqdm (for progress bars), dataclasses, sklearn.metrics
+
+
+--------------------------------------------------------------------------------
+FILE: submission/solution.py  (Submission Directory)
+Size: ~5.2 KB | Lines: 143
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    This is the MAIN DELIVERABLE — the actual competition solution. It contains
+    the complete implementation of the GRU-based prediction model.
+
+    DETAILED BREAKDOWN:
+
+    A) Configuration Constants (lines 9-16):
+       - N_FEATURES = 32       : Number of input/output features
+       - HIDDEN_SIZE = 256     : Size of the GRU's internal hidden state vector
+       - NUM_LAYERS = 3        : Number of stacked GRU layers
+       - DROPOUT_RATE = 0.30   : Dropout between GRU layers (regularization)
+
+       These values MUST match whatever was used during training.
+
+    B) GRUModel Class (lines 21-56):
+       A PyTorch neural network module with two layers:
+
+       1. nn.GRU:
+          - The core recurrent layer
+          - input_size = 32 (takes 32 features)
+          - hidden_size = 256 (internal representation is 256-dimensional)
+          - num_layers = 3 (three GRU layers stacked on top of each other)
+          - batch_first = True (input shape is [batch, seq, features])
+          - dropout = 0.30 between layers (only applied during training)
+
+       2. nn.Linear:
+          - A fully-connected layer that maps from hidden_size (256) to
+            output_size (32) — converting the GRU's internal representation
+            back to the 32-feature prediction.
+
+       Methods:
+         - init_hidden(batch_size, device):
+             Creates a zero-initialized hidden state tensor of shape
+             (num_layers, batch_size, hidden_size) = (3, 1, 256).
+             Uses @torch.no_grad() since this is not a learnable operation.
+
+         - forward(x, hidden):
+             Takes input x of shape (1, 1, 32) and hidden state of shape (3, 1, 256).
+             Passes through the GRU to get output and new hidden state.
+             Takes the last timestep's output and passes it through the Linear layer.
+             Returns the prediction (1, 32) and the new hidden state (3, 1, 256).
+
+    C) PredictionModel Class (lines 59-143):
+       This is the class the competition system instantiates and calls.
+
+       __init__ (lines 63-92):
+         1. Sets PyTorch to use 1 thread (competition requirement for fair timing)
+         2. Sets device to CPU
+         3. Creates a GRUModel instance with the configured hyperparameters
+         4. Loads trained weights from "gru_model.pth" file
+         5. Sets model to evaluation mode (disables dropout)
+         6. Loads the fitted StandardScaler from "scaler.joblib"
+         7. Initializes an empty dictionary self.hidden_states = {} to track
+            per-sequence hidden states
+
+       predict(data_point) (lines 94-143):
+         This method is called once per row. Here's exactly what happens:
+
+         Step 1 (lines 99-103): Extract seq_ix and step_in_seq from data_point.
+                 Cast step_in_seq to int (safety against float values).
+
+         Step 2 (lines 105-110): STATE MANAGEMENT
+                 If step_in_seq == 0 OR seq_ix not seen before:
+                   → Create a fresh zero hidden state for this sequence
+                 Retrieve the current hidden state for this sequence.
+
+         Step 3 (lines 112-117): PREPROCESSING
+                 Reshape the state to (1, 32) for the scaler.
+                 Apply StandardScaler.transform() to normalize the values.
+                 Convert to a PyTorch tensor of shape (1, 1, 32).
+
+         Step 4 (lines 119-128): MODEL INFERENCE
+                 With torch.no_grad() (no gradient computation needed):
+                   Pass the tensor and hidden state through the GRU model.
+                   Get the prediction tensor and new hidden state.
+                   Convert prediction to numpy array.
+
+         Step 5 (lines 130-132): UPDATE STATE
+                 Store the new hidden state back in self.hidden_states[seq_ix].
+                 Detach() it from the computation graph to save memory.
+
+         Step 6 (lines 134-136): CHECK need_prediction
+                 If need_prediction is False → return None.
+
+         Step 7 (lines 138-143): POST-PROCESS & RETURN
+                 Apply scaler.inverse_transform() to convert the scaled
+                 prediction back to the original data scale.
+                 Flatten to a 1D array of shape (32,) and return it.
+
+    IMPORTANT NOTES:
+    - The model ALWAYS runs inference (even when need_prediction is False) so
+      that the hidden state is updated. The prediction is just discarded.
+    - Hidden states are stored per-sequence in a dictionary, allowing the model
+      to handle interleaved sequences.
+    - All file paths (gru_model.pth, scaler.joblib) are relative, meaning
+      these files must be in the same directory as solution.py when running.
+
+
+--------------------------------------------------------------------------------
+FILE: submission/gru_model.pth  (Submission Directory)
+Size: ~4 MB (binary file)
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    This is a PyTorch STATE DICTIONARY — a binary file containing all the
+    trained weights and biases of the GRU neural network.
+
+    It was created during the training phase using:
+        torch.save(model.state_dict(), 'gru_model.pth')
+
+    It contains the learned parameters for:
+      - 3 stacked GRU layers (each with input-hidden and hidden-hidden
+        weight matrices and biases for the reset, update, and new gates)
+      - 1 Linear output layer (weight matrix of shape 32×256 and bias of shape 32)
+
+    WHY IT EXISTS:
+    Training a neural network takes significant time and compute. Once trained,
+    the weights are saved so that the model can be loaded instantly during
+    inference (prediction time). This file IS the trained model's "brain".
+
+    HOW IT IS USED:
+    In solution.py, line 83:
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+
+
+--------------------------------------------------------------------------------
+FILE: submission/scaler.joblib  (Submission Directory)
+Size: ~1.3 KB (binary file)
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    A serialized sklearn StandardScaler object, saved using the joblib library.
+
+    During training, this scaler was "fitted" on the training data:
+        scaler = StandardScaler()
+        scaler.fit(training_data)
+        joblib.dump(scaler, 'scaler.joblib')
+
+    It stores:
+      - The MEAN of each of the 32 features (from training data)
+      - The STANDARD DEVIATION of each of the 32 features (from training data)
+
+    WHY IT EXISTS:
+    Neural networks perform better when input features are normalized (mean=0,
+    std=1). The scaler must be the EXACT SAME one used during training — if you
+    use a different scaler, the model would receive data in a different scale
+    than it was trained on, producing garbage predictions.
+
+    HOW IT IS USED:
+    1. Before feeding data to the GRU:
+         scaled_state = self.scaler.transform(state_reshaped)
+    2. After getting the GRU's output:
+         prediction_original = self.scaler.inverse_transform(prediction_scaled)
+
+
+--------------------------------------------------------------------------------
+FILE: examples/simple/solution.py  (Examples Directory)
+Size: ~1.9 KB | Lines: 66
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    A SIMPLE BASELINE SOLUTION that demonstrates the expected structure of a
+    PredictionModel class, but uses a trivial algorithm instead of a neural network.
+
+    Algorithm: MOVING AVERAGE
+      - For each sequence, it keeps a list of all previously seen state vectors.
+      - When a prediction is requested, it returns the arithmetic MEAN of all
+        states seen so far in that sequence.
+      - When a new sequence starts (seq_ix changes), it clears the history.
+
+    PredictionModel Class:
+      - __init__: Initializes current_seq_ix = None and sequence_history = []
+      - predict(data_point):
+          * If seq_ix changed → reset history
+          * Append current state to history
+          * If need_prediction is False → return None
+          * If need_prediction is True → return np.mean(sequence_history, axis=0)
+
+    Main Block (lines 36-65):
+      This code runs when the file is executed directly (python solution.py).
+      It performs a local evaluation:
+        1. Loads the training dataset from "datasets/train.parquet"
+        2. Creates a PredictionModel instance (the MOVING AVERAGE model, NOT the GRU)
+        3. Creates a ScorerStepByStep instance
+        4. Runs the scorer to evaluate the simple model
+        5. Prints the mean R² score and R² for the first 5 features
+
+      IMPORTANT CLARIFICATIONS:
+
+        Q: Where does the evaluation data come from?
+        A: It uses the TRAINING dataset itself (datasets/train.parquet). There is
+           no separate test file here. This is just a local sanity check to see
+           how your model performs. The actual competition uses a hidden test
+           dataset that you never see.
+           See line 38: test_file = f"{CURRENT_DIR}/../../datasets/train.parquet"
+
+        Q: Does it generate accuracy for a single row?
+        A: NO. It processes ALL 517,000 rows one-by-one, collects ALL 464,783
+           predictions (rows where need_prediction == 1), and then computes the
+           R² score across ALL predictions at once. The accuracy is NOT per-row —
+           it's an aggregate score over the entire dataset.
+
+        Q: What model is being used?
+        A: The SIMPLE MOVING AVERAGE model — NOT the GRU neural network.
+           This baseline model just returns the average of all previous states
+           in the current sequence. It's intentionally simple and serves as
+           a minimum score to beat. The GRU model (in submission/solution.py)
+           should produce a much higher score.
+
+      BASELINE RESULT:
+        When you run this, you get:
+            Mean R² across all features: 0.221986
+            Feature 0: R² = 0.073986
+            Feature 1: R² = 0.096358
+            Feature 2: R² = 0.242396
+            Feature 3: R² = 0.346401
+            Feature 4: R² = 0.169095
+        This score (0.22) is quite low — it means the moving average approach
+        only explains about 22% of the variance in the data. The GRU model
+        should achieve a significantly higher R² score.
+
+    WHY IT EXISTS:
+    This serves as a STARTING POINT / REFERENCE IMPLEMENTATION:
+      - Shows beginners the expected class structure
+      - Provides a baseline score to beat
+      - Demonstrates how to use the ScorerStepByStep for local testing
+      - Can be used to verify that the submission pipeline works
+
+    DEPENDENCIES:
+    numpy, os, sys (and utils.py from the root directory)
+
+
+--------------------------------------------------------------------------------
+FILE: examples/simple/README.md  (Examples Directory)
+Size: ~1.1 KB | Lines: 36
+--------------------------------------------------------------------------------
+
+    WHAT IT CONTAINS:
+    A short Markdown documentation file specifically for the simple example.
+    It explains:
+      - The moving average algorithm used in the simple solution
+      - The class structure
+      - How to run the example (cd examples/simple && python solution.py)
+      - Suggestions for improvement (LSTM, GRU, Mamba models)
+
+    WHY IT EXISTS:
+    Complements the simple example solution with human-readable documentation.
+
+
+================================================================================
+6. DATA FLOW: STEP-BY-STEP WALKTHROUGH
+================================================================================
+
+Here is the complete data flow from raw data to final prediction:
+
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  TRAINING PHASE (done beforehand, not in this codebase)         │
+    │                                                                  │
+    │  1. Load train.parquet dataset from Kaggle                       │
+    │  2. Fit a StandardScaler on all state vectors                    │
+    │  3. Scale all training data                                      │
+    │  4. Train a GRU model on the scaled sequences                    │
+    │  5. Save model weights → gru_model.pth                           │
+    │  6. Save fitted scaler → scaler.joblib                           │
+    └──────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  INFERENCE PHASE (this codebase)                                 │
+    │                                                                  │
+    │  1. Competition system creates PredictionModel() instance        │
+    │     → Loads gru_model.pth and scaler.joblib                      │
+    │     → Initializes empty hidden_states dictionary                 │
+    │                                                                  │
+    │  2. For EACH row in the test dataset:                            │
+    │     a. Competition creates a DataPoint from the row              │
+    │     b. Calls model.predict(data_point)                           │
+    │                                                                  │
+    │     Inside predict():                                            │
+    │     ┌──────────────────────────────────────────────────────────┐ │
+    │     │ Is this a NEW sequence?                                  │ │
+    │     │   YES → Create fresh zero hidden state                  │ │
+    │     │   NO  → Use stored hidden state for this sequence       │ │
+    │     │                                                          │ │
+    │     │ Scale the input state using StandardScaler               │ │
+    │     │ Convert to PyTorch tensor (1, 1, 32)                    │ │
+    │     │                                                          │ │
+    │     │ Feed [tensor + hidden_state] into GRU model              │ │
+    │     │ Get [output + new_hidden_state]                          │ │
+    │     │ Store new_hidden_state for next call                     │ │
+    │     │                                                          │ │
+    │     │ need_prediction == False?                                │ │
+    │     │   → return None                                          │ │
+    │     │                                                          │ │
+    │     │ need_prediction == True?                                  │ │
+    │     │   → Inverse-scale the output                             │ │
+    │     │   → Return as numpy array (32,)                          │ │
+    │     └──────────────────────────────────────────────────────────┘ │
+    │                                                                  │
+    │  3. Competition scorer collects all predictions                   │
+    │  4. Computes R² score for each feature                           │
+    │  5. Reports mean R² as final score                               │
+    └──────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+7. MODEL ARCHITECTURE DEEP DIVE
+================================================================================
+
+The GRU (Gated Recurrent Unit) is a type of Recurrent Neural Network (RNN).
+
+WHY GRU?
+    - GRUs are designed for SEQUENTIAL data (like time series)
+    - They solve the "vanishing gradient" problem of vanilla RNNs
+    - They are simpler and faster than LSTMs (Long Short-Term Memory) while
+      achieving similar performance on many tasks
+    - They maintain a "hidden state" that acts as a compressed memory of
+      everything the model has seen so far in the sequence
+
+ARCHITECTURE DIAGRAM:
+
+    Input (32 features)
+         │
+         ▼
+    ┌─────────────┐
+    │ StandardScaler │  (normalize: mean=0, std=1)
+    └─────────────┘
+         │
+         ▼
+    ┌─────────────────────────────────┐
+    │        GRU Layer 1               │   Input: 32  → Hidden: 256
+    │   (with dropout 0.30)            │
+    ├─────────────────────────────────┤
+    │        GRU Layer 2               │   Hidden: 256 → Hidden: 256
+    │   (with dropout 0.30)            │
+    ├─────────────────────────────────┤
+    │        GRU Layer 3               │   Hidden: 256 → Hidden: 256
+    │   (no dropout on last layer)     │
+    └─────────────────────────────────┘
+         │
+         ▼
+    ┌─────────────┐
+    │ Linear Layer │   Hidden: 256 → Output: 32
+    └─────────────┘
+         │
+         ▼
+    ┌──────────────────┐
+    │ Inverse Scaler    │  (convert back to original scale)
+    └──────────────────┘
+         │
+         ▼
+    Output (32 features predicted)
+
+
+HIDDEN STATE:
+    Shape: (3, 1, 256)
+      - 3   = number of GRU layers (each has its own hidden state)
+      - 1   = batch size (always 1 in this stateful inference)
+      - 256 = hidden size (dimensionality of each layer's memory)
+
+    The hidden state is like a 3-layer memory bank. Each layer captures
+    different levels of abstraction:
+      - Layer 1: Low-level patterns (short-term fluctuations)
+      - Layer 2: Mid-level patterns (medium-term trends)
+      - Layer 3: High-level patterns (long-term dependencies)
+
+
+================================================================================
+8. EVALUATION METRIC
+================================================================================
+
+The model is evaluated using R² (R-squared), also known as the
+"coefficient of determination".
+
+FORMULA:
+    R²_i = 1 - (sum of squared residuals) / (sum of squared total)
+         = 1 - Σ(y_true - y_pred)² / Σ(y_true - y_mean)²
+
+    For each feature i (out of 32), R²_i is computed independently.
+    Final Score = mean(R²_1, R²_2, ..., R²_32)
+
+INTERPRETATION:
+    R² = 1.0  → Perfect predictions
+    R² = 0.0  → Model is as good as predicting the mean (useless)
+    R² < 0.0  → Model is WORSE than predicting the mean
+
+Higher is better. The goal is to maximize the mean R² across all 32 features.
+
+
+================================================================================
+9. HOW TO RUN THE PROJECT
+================================================================================
+
+PREREQUISITES:
+    - Python 3.10+
+    - Install dependencies:
+        pip install numpy pandas torch scikit-learn joblib tqdm
+
+RUNNING THE SIMPLE EXAMPLE (baseline):
+    1. Download the dataset from Kaggle (link in README.md)
+    2. Place it at: Wunder/datasets/train.parquet
+    3. Install pyarrow (required for reading .parquet files):
+        pip install pyarrow
+    4. Run:
+        cd examples/simple
+        python solution.py
+    5. This will take about 1-2 minutes to process all 517,000 rows.
+    6. It prints the R² scores for the MOVING AVERAGE baseline (NOT the GRU).
+
+    WHAT HAPPENS BEHIND THE SCENES:
+      - The script loads datasets/train.parquet (the TRAINING data, not a
+        separate test set — this is just a local sanity check).
+      - It creates the simple Moving Average PredictionModel (NOT the GRU).
+      - The ScorerStepByStep iterates through ALL 517,000 rows one-by-one,
+        calling model.predict() for each row.
+      - For the 464,783 rows where need_prediction == 1, it collects the
+        model's prediction AND the actual next state.
+      - After all rows are processed, it computes R² across ALL predictions
+        at once (this is NOT a per-row accuracy — it's an aggregate score).
+      - Expected output: Mean R² ≈ 0.22 (low, because moving average is
+        a very basic approach. The GRU model should score much higher).
+
+RUNNING THE ACTUAL GRU SOLUTION (for submission):
+    The submission/solution.py is designed to be run by the competition's
+    evaluation system. It expects:
+      - solution.py, gru_model.pth, and scaler.joblib to be in the same directory
+      - The competition system will import PredictionModel and call predict()
+
+    For LOCAL TESTING, you could write a script like:
+        from submission.solution import PredictionModel
+        from utils import ScorerStepByStep
+
+        model = PredictionModel()
+        scorer = ScorerStepByStep("datasets/train.parquet")
+        results = scorer.score(model)
+        print(results["mean_r2"])
+
+PACKAGING FOR SUBMISSION:
+    Create a .zip file containing (at the root level):
+      - solution.py
+      - gru_model.pth
+      - scaler.joblib
+
+
+================================================================================
+10. TECH STACK & DEPENDENCIES
+================================================================================
+
+    Language          : Python 3.10+
+    ML Framework      : PyTorch (torch, torch.nn)
+    Data Processing   : NumPy, Pandas
+    Preprocessing     : scikit-learn (StandardScaler)
+    Serialization     : joblib (for saving/loading the scaler)
+    Progress Bars     : tqdm
+    Data Format       : Parquet (columnar storage, fast reads)
+    Model Type        : GRU (Gated Recurrent Unit) — a Recurrent Neural Network
+    Evaluation        : R² score (sklearn.metrics.r2_score)
+
+
+================================================================================
+11. KEY CONCEPTS TO UNDERSTAND
+================================================================================
+
+A) STATEFUL vs STATELESS MODELS:
+    Most ML models are stateless — you give them input, they give you output,
+    with no memory of previous inputs. This model is STATEFUL — it maintains
+    a hidden state (memory) across multiple calls to predict(). This memory
+    allows it to understand the CONTEXT of where it is in a sequence.
+
+B) GRU (Gated Recurrent Unit):
+    A type of RNN that uses "gates" to control information flow:
+      - Reset gate:  Decides how much past information to forget
+      - Update gate: Decides how much new information to incorporate
+    This makes GRUs much better at learning long-range dependencies than
+    vanilla RNNs, while being simpler than LSTMs.
+
+C) STANDARDSCALER:
+    A preprocessing step that normalizes each feature to have mean=0 and
+    standard deviation=1. The formula is:
+        x_scaled = (x - mean) / std
+    Inverse transform:
+        x_original = (x_scaled * std) + mean
+
+D) STATE DICTIONARY (.pth file):
+    In PyTorch, a "state dict" is a Python dictionary that maps each layer
+    name to its weight tensor. It does NOT contain the model architecture —
+    you must define the architecture in code and then load the weights into it.
+
+E) WHY need_prediction EXISTS:
+    In real market data, you don't always need a prediction. Some steps are
+    "warmup" steps where the model should just observe and build up its
+    internal state. The need_prediction flag tells the model when to actually
+    produce output vs when to just listen and learn.
+
+F) SEQUENCE INDEPENDENCE:
+    Each sequence (identified by seq_ix) is INDEPENDENT. Information from
+    sequence #5 should NEVER leak into predictions for sequence #6. This is
+    why the hidden state must be reset when a new sequence begins.
+
+
+================================================================================
+12. THE DATASET: WHAT IT LOOKS LIKE
+================================================================================
+
+SOURCE:
+    Kaggle: https://www.kaggle.com/datasets/biradar1913/wunder
+    File  : train.parquet (~141 MB)
+
+OVERALL STATISTICS:
+    Total Rows           : 517,000
+    Total Columns        : 35
+    Number of Sequences  : 517 (seq_ix ranges from 0 to 516)
+    Steps per Sequence   : Exactly 1,000 (every sequence has the same length)
+    Number of Features   : 32 (columns named "0" through "31")
+    Warmup Steps/Sequence: 101 (first 101 steps have need_prediction = 0)
+    Prediction Steps/Seq : 899 (remaining steps have need_prediction = 1)
+    Total Predictions    : 464,783 rows require predictions
+    Total Warmup Rows    : 52,217 rows are warmup (observe only)
+    Missing Values (NaN) : 0 (no missing data)
+
+COLUMN LAYOUT:
+    The 35 columns are:
+
+    Column Name       | Type    | Description
+    ------------------|---------|-----------------------------------------------
+    seq_ix            | int64   | Sequence ID (0 to 516). Identifies which
+                      |         | independent sequence this row belongs to.
+    step_in_seq       | int64   | Step number within the sequence (0 to 999).
+                      |         | 0 = first step, 999 = last step.
+    need_prediction   | int64   | 0 = warmup step (just observe, return None).
+                      |         | 1 = prediction required (return 32-dim array).
+    0                 | float64 | Feature 0 — market state dimension 0
+    1                 | float64 | Feature 1 — market state dimension 1
+    2                 | float64 | Feature 2 — market state dimension 2
+    ...               | ...     | (continues for all 32 features)
+    31                | float64 | Feature 31 — market state dimension 31
+
+SAMPLE DATA (first 8 rows):
+
+    seq_ix | step | need_pred |    feat_0 |    feat_1 |   feat_2 | ... |   feat_31
+    -------|------|-----------|-----------|-----------|----------|-----|----------
+         0 |    0 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... | -0.495940
+         0 |    1 |         0 |  0.xxxxxx | -0.xxxxxx | 0.xxxxxx | ... | -1.171435
+         0 |    2 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... | -0.417057
+         0 |    3 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... | -1.364489
+         0 |    4 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... | -0.740237
+         0 |    5 |         0 |  0.xxxxxx | -0.xxxxxx | 0.xxxxxx | ... |  0.xxxxxx
+         0 |    6 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... |  0.xxxxxx
+         0 |    7 |         0 |  0.xxxxxx |  0.xxxxxx | 0.xxxxxx | ... |  0.xxxxxx
+
+    (The x's represent actual floating-point values. Each row has 32 float features.)
+
+FEATURE VALUE RANGES:
+    All 32 features are floating-point numbers, roughly in the range [-5.2, +5.2].
+    They appear to be approximately standard-normal distributed (mean ≈ 0, std ≈ 1),
+    which suggests the dataset may already be pre-scaled or comes from a
+    standardized source.
+
+    Feature Statistics (across all 517,000 rows):
+        Mean   : ≈ 0.0  (close to zero for all features)
+        Std    : ≈ 1.0  (close to one for all features)
+        Min    : ≈ -5.2
+        Max    : ≈ +5.2
+
+WARMUP vs PREDICTION PATTERN:
+    Within each sequence of 1000 steps:
+
+    Steps 0-100   (101 steps): need_prediction = 0 (WARMUP)
+        → The model receives data but does NOT need to predict.
+        → Purpose: Let the model "warm up" its hidden state by observing
+          the beginning of the sequence before making predictions.
+
+    Steps 101-999 (899 steps): need_prediction = 1 (PREDICTION)
+        → The model MUST return a prediction (numpy array of 32 floats).
+        → This prediction should be for the NEXT timestep's state.
+
+    This means:
+        - For each sequence, the model gets 101 free observations to build
+          its internal understanding of the sequence pattern.
+        - Then it must start predicting for the remaining 899 steps.
+
+VISUALIZATION OF ONE SEQUENCE:
+
+    Step:    0    1    2   ...  100  101  102  103  ...  998  999
+    Predict: No   No   No  ...  No   YES  YES  YES ...  YES  YES
+             |<--- WARMUP (101) --->||<--- PREDICTIONS (899) ---->|
+
+
+================================================================================
+13. THE PROBLEM STATEMENT
+================================================================================
+
+COMPETITION CHALLENGE:
+    Build a machine learning model that can predict the next market state
+    vector in a time series, given the history of previous states.
+
+FORMAL DEFINITION:
+    Given a sequence of market state vectors:
+        S_0, S_1, S_2, ..., S_t
+    where each S_i is a vector of 32 floating-point numbers,
+    predict the NEXT state vector S_{t+1}.
+
+CONSTRAINTS & RULES:
+
+    1. SINGLE CLASS INTERFACE:
+       Your entire solution must be a single Python class called "PredictionModel"
+       in a file called "solution.py". The competition system will:
+         - Instantiate: model = PredictionModel()
+         - Call repeatedly: prediction = model.predict(data_point)
+
+    2. STATEFUL PROCESSING:
+       Data arrives ONE ROW AT A TIME. You cannot look ahead. You cannot
+       access future data. You must process each DataPoint as it comes and
+       maintain your own internal state.
+
+    3. SEQUENCE INDEPENDENCE:
+       Each sequence (identified by seq_ix) is completely independent.
+       When a new sequence begins, you MUST reset your model's internal
+       state. No information should leak between sequences.
+
+    4. WARMUP HANDLING:
+       When need_prediction is False:
+         - You MAY use the data to update internal state
+         - You MUST return None (not a prediction)
+       When need_prediction is True:
+         - You MUST return a numpy array of shape (32,)
+         - This array is your prediction for the NEXT state
+
+    5. PREDICTION FORMAT:
+       - Return type: numpy.ndarray with shape (N,) where N = 32
+       - Values: floating-point numbers in the original data scale
+       - Must match the exact dimensionality of the state vector
+
+    6. SCORING:
+       - Metric: R² (R-squared / coefficient of determination)
+       - Computed per-feature, then averaged across all 32 features
+       - Higher is better (1.0 = perfect, 0.0 = useless, <0 = worse than mean)
+
+    7. RESOURCE CONSTRAINTS:
+       - Single-threaded CPU execution only (torch.set_num_threads(1))
+       - All model files (weights, scaler, etc.) must be packaged in a
+         single .zip file alongside solution.py
+
+WHY THIS PROBLEM IS HARD:
+    - The model must work in REAL-TIME (one step at a time, no batch processing)
+    - It must manage its own memory efficiently
+    - It must handle sequence boundaries correctly (reset on new sequence)
+    - The prediction must be for the NEXT timestep, not the current one
+    - 32 features must ALL be predicted simultaneously and accurately
+    - The model must generalize to unseen test sequences
+
+
+================================================================================
+14. THE SOLUTION: WHAT WAS IMPLEMENTED & WHY
+================================================================================
+
+SOLUTION SUMMARY:
+    A 3-layer stacked GRU (Gated Recurrent Unit) neural network with
+    StandardScaler preprocessing, trained on the Kaggle dataset.
+
+WHY GRU WAS CHOSEN (over other approaches):
+
+    Approach Considered    | Why It Was/Wasn't Used
+    -----------------------|------------------------------------------------------
+    Moving Average         | Too simple. Only captures the mean, not patterns.
+                           | Used as a BASELINE in examples/simple/solution.py.
+    Linear Regression      | Cannot capture non-linear temporal dependencies.
+    LSTM                   | Would also work, but GRU is simpler (2 gates vs 3),
+                           | trains faster, and often performs equally well.
+    GRU (CHOSEN)           | Good balance of complexity and performance. Fewer
+                           | parameters than LSTM = faster inference (important
+                           | for single-threaded CPU constraint).
+    Transformer            | Requires seeing the full sequence at once (not
+                           | compatible with step-by-step stateful processing
+                           | without significant modification).
+    Mamba (State Space)    | Newer approach that could work, but less battle-tested
+                           | and harder to implement for step-by-step inference.
+
+SOLUTION ARCHITECTURE:
+
+    The solution consists of three components:
+
+    COMPONENT 1: StandardScaler (scaler.joblib)
+        What: Normalizes each of the 32 features to mean=0, std=1.
+        Why:  Neural networks are sensitive to input scale. Features with
+              larger values would dominate the learning process. Scaling
+              puts all features on equal footing.
+        When: Applied BEFORE feeding data to the GRU (transform) and
+              AFTER getting the GRU's output (inverse_transform).
+
+    COMPONENT 2: GRU Neural Network (gru_model.pth)
+        Architecture:
+            Layer 1: GRU(input=32, hidden=256, dropout=0.30)
+            Layer 2: GRU(input=256, hidden=256, dropout=0.30)
+            Layer 3: GRU(input=256, hidden=256, dropout=0.00)
+            Layer 4: Linear(input=256, output=32)
+
+        Total Parameters: ~600K+ learnable parameters
+        Hidden State Shape: (3, 1, 256) — one 256-dim vector per layer
+
+        How it works:
+            1. Takes scaled input (32 numbers) + previous hidden state
+            2. GRU layers process the input, updating their internal gates:
+               - Reset gate: "Should I forget some past information?"
+               - Update gate: "How much should I blend old and new info?"
+            3. Produces an updated hidden state (the model's "memory")
+            4. Linear layer converts hidden representation → 32-dim prediction
+
+    COMPONENT 3: State Management (PredictionModel class)
+        What: Python dictionary (self.hidden_states) that maps sequence IDs
+              to their corresponding GRU hidden states.
+        Why:  The competition may interleave rows from different sequences.
+              Each sequence needs its own independent memory.
+        How:  When seq_ix changes or step_in_seq == 0, a fresh hidden state
+              is created. Otherwise, the stored hidden state is retrieved
+              and updated after processing.
+
+TRAINING PROCESS (done offline, not in this codebase):
+
+    1. LOAD DATA: Read train.parquet with pandas
+    2. FIT SCALER: Fit StandardScaler on all state vectors
+    3. SCALE DATA: Transform all states to normalized form
+    4. CREATE SEQUENCES: Group rows by seq_ix, create input-output pairs
+       where input = state at time t, target = state at time t+1
+    5. TRAIN GRU: Feed sequences through the GRU model, compute loss
+       (likely MSE — Mean Squared Error) between predicted and actual
+       next states, backpropagate gradients, update weights
+    6. SAVE: Export model weights (gru_model.pth) and scaler (scaler.joblib)
+
+    Hyperparameters used:
+        Hidden Size  : 256 (larger = more capacity, but slower)
+        Num Layers   : 3   (deeper = captures more complex patterns)
+        Dropout      : 0.30 (prevents overfitting by randomly dropping neurons)
+        Batch First  : True (input shape convention: [batch, seq, features])
+
+INFERENCE PIPELINE (what happens when the competition runs the model):
+
+    For each DataPoint that arrives:
+
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                                                                     │
+    │  1. Is this a new sequence?                                         │
+    │     └─ YES → self.hidden_states[seq_ix] = zeros(3, 1, 256)          │
+    │     └─ NO  → retrieve self.hidden_states[seq_ix]                    │
+    │                                                                     │
+    │  2. Scale input: scaler.transform(state) → scaled_state             │
+    │                                                                     │
+    │  3. Convert: scaled_state → PyTorch tensor (1, 1, 32)               │
+    │                                                                     │
+    │  4. Forward pass: GRU(tensor, hidden) → (output, new_hidden)        │
+    │                                                                     │
+    │  5. Store: self.hidden_states[seq_ix] = new_hidden                  │
+    │                                                                     │
+    │  6. If need_prediction == False → return None                       │
+    │     If need_prediction == True:                                     │
+    │       → scaler.inverse_transform(output) → prediction               │
+    │       → return prediction.flatten()  # shape (32,)                  │
+    │                                                                     │
+    └─────────────────────────────────────────────────────────────────────┘
+
+KEY DESIGN DECISIONS:
+
+    1. ALWAYS RUN INFERENCE (even during warmup):
+       Even when need_prediction is False, the model still processes the
+       input and updates its hidden state. This ensures the model has
+       seen all 101 warmup steps before its first prediction, giving it
+       maximum context.
+
+    2. PER-SEQUENCE HIDDEN STATE DICTIONARY:
+       Instead of a single hidden state, each sequence gets its own entry
+       in a dictionary. This handles the case where sequences might be
+       interleaved (row from seq 1, then seq 2, then seq 1 again).
+
+    3. DETACH HIDDEN STATES:
+       After each step, hidden_state.detach() is called. This breaks the
+       computation graph, preventing memory leaks from accumulating
+       gradient history across thousands of steps.
+
+    4. SINGLE-THREADED CPU:
+       torch.set_num_threads(1) is set in __init__ to comply with the
+       competition's resource constraints and ensure fair timing.
+
+    5. INVERSE SCALING ON OUTPUT:
+       The model predicts in scaled space (mean=0, std=1), but the
+       competition expects answers in original scale. inverse_transform()
+       converts back: prediction_original = (prediction_scaled * std) + mean.
+
+
+================================================================================
+                              END OF DOCUMENTATION
+================================================================================
+
+Document created : March 2026
+Document updated : March 2026 (added dataset, problem statement, and solution sections)
+This file provides a complete overview of the Wunder project. Share it with
+anyone who needs to understand the project structure, architecture, and logic.
