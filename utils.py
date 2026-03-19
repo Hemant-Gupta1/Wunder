@@ -73,4 +73,12 @@ class ScorerStepByStep:
                 targets[:, ix_feature], predictions[:, ix_feature]
             )
         scores["mean_r2"] = np.mean(list(scores.values()))
+
+        # Sort features by R² to identify weakest and strongest
+        sorted_features = sorted(
+            [(f, s) for f, s in scores.items() if f != "mean_r2"],
+            key=lambda x: x[1]
+        )
+        scores["worst_5"] = sorted_features[:5]
+        scores["best_5"] = sorted_features[-5:]
         return scores

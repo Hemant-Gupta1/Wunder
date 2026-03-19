@@ -1017,10 +1017,156 @@ KEY DESIGN DECISIONS:
 
 
 ================================================================================
+15. CHANGELOG — ACCURACY OPTIMIZATION UPDATE (March 2026)
+================================================================================
+
+This section documents all code changes made to improve model accuracy.
+Two files were modified: submission/solution.py and utils.py.
+Nothing was deleted — all original functionality is preserved.
+
+--------------------------------------------------------------------------------
+FILE MODIFIED: submission/solution.py
+--------------------------------------------------------------------------------
+
+    WHAT WAS ADDED:
+
+    A) NEW CLASS: LSTMModel (added alongside existing GRUModel)
+       - LSTM (Long Short-Term Memory) model with 3 gates (forget, input, output)
+         and a separate cell state, giving it better long-term memory than GRU.
+       - Has the same interface as GRUModel: init_hidden(), forward()
+       - Key difference: init_hidden() returns a TUPLE (h_0, c_0) instead of
+         just h_0, because LSTM has both a hidden state AND a cell state.
+       - Includes LayerNorm and residual connection (same as GRU).
+
+    B) RESIDUAL/SKIP CONNECTION (in both GRUModel and LSTMModel)
+       - Added in forward() method of BOTH models.
+       - Instead of predicting absolute next state, the model now predicts
+         the CHANGE (delta) from the current state.
+       - Code: pred = self.linear(out) + x[:, -1, :self.output_size]
+       - WHY: Learning small deltas is much easier for neural networks than
+         learning absolute values. This often provides the single biggest
+         accuracy improvement in time-series models.
+
+    C) LAYER NORMALIZATION (in both GRUModel and LSTMModel)
+       - Added nn.LayerNorm(hidden_size) after GRU/LSTM output, before
+         the Linear layer.
+       - WHY: Normalizes the hidden representations to have consistent scale
+         across timesteps. Stabilizes training and improves generalization.
+
+    D) DELTA FEATURES (in PredictionModel.predict())
+       - When USE_DELTA_FEATURES = True, the model receives 64 inputs instead
+         of 32: [current_scaled_state (32) + delta_from_previous (32)].
+       - The delta is: state[t] - state[t-1] (rate of change).
+       - For the first step of a sequence, delta is zeros.
+       - self.prev_scaled_states dictionary tracks previous states per sequence.
+       - WHY: Gives the model explicit information about the direction and
+         speed of change, not just the current position.
+
+    E) MEMORY CLEANUP (in PredictionModel.predict())
+       - When a new sequence starts, old hidden states and delta states from
+         previous sequences are deleted from dictionaries.
+       - WHY: Prevents unbounded memory growth on large test sets.
+
+    F) CONFIGURABLE MODEL TYPE (MODEL_TYPE constant)
+       - Set MODEL_TYPE = "GRU" to use GRUModel (loads gru_model.pth)
+       - Set MODEL_TYPE = "LSTM" to use LSTMModel (loads lstm_model.pth)
+       - PredictionModel.__init__() selects the appropriate class and weight file.
+
+    G) LSTM HIDDEN STATE HANDLING (in PredictionModel.predict())
+       - Added special handling for LSTM's tuple hidden state (h, c).
+       - Both h and c are detached separately to prevent memory leaks.
+
+    WHAT WAS MODIFIED (not deleted):
+
+    H) HYPERPARAMETER CHANGES:
+       - HIDDEN_SIZE: 256 → 512 (doubled for more model capacity)
+       - DROPOUT_RATE: 0.30 → 0.15 (reduced to preserve more information flow)
+       - Added new constants: USE_DELTA_FEATURES, MODEL_TYPE, INPUT_SIZE
+
+    I) GRUModel CLASS (modified, NOT deleted):
+       - Added self.layer_norm = nn.LayerNorm(hidden_size)
+       - Added self.input_size and self.output_size attributes
+       - forward() now applies LayerNorm before Linear layer
+       - forward() now adds residual connection after Linear layer
+
+    WHAT WAS NOT CHANGED:
+       - GRUModel class STILL EXISTS (not removed)
+       - Overall PredictionModel interface is unchanged (same __init__, predict())
+       - Still loads scaler.joblib for preprocessing
+       - Still handles need_prediction flag the same way
+       - Still uses torch.no_grad() for inference
+
+    FULL LIST OF NEW CONSTANTS:
+       N_FEATURES      = 32    (unchanged)
+       HIDDEN_SIZE     = 512   (was 256)
+       NUM_LAYERS      = 3     (unchanged)
+       DROPOUT_RATE    = 0.15  (was 0.30)
+       USE_DELTA_FEATURES = True  (NEW — enables 64-dim input)
+       MODEL_TYPE      = "GRU"    (NEW — switch between "GRU" and "LSTM")
+       INPUT_SIZE      = 64 if USE_DELTA_FEATURES else 32  (NEW — computed)
+
+
+--------------------------------------------------------------------------------
+FILE MODIFIED: utils.py
+--------------------------------------------------------------------------------
+
+    WHAT WAS ADDED:
+
+    A) PER-FEATURE R² SORTING (in calc_metrics())
+       - After computing R² for all 32 features, features are now sorted
+         by their R² score to identify weakest and strongest.
+       - Two new keys added to the returned dictionary:
+           scores["worst_5"] = list of 5 (feature_name, R²) tuples with LOWEST R²
+           scores["best_5"]  = list of 5 (feature_name, R²) tuples with HIGHEST R²
+       - WHY: Helps identify which features the model struggles with most,
+         so training can be focused on improving those specific features.
+
+    WHAT WAS NOT CHANGED:
+       - DataPoint dataclass is unchanged
+       - PredictionModel dummy class is unchanged
+       - ScorerStepByStep.__init__() is unchanged
+       - ScorerStepByStep.score() is unchanged
+       - ScorerStepByStep.check_prediction() is unchanged
+       - The existing calc_metrics logic is preserved; new lines are additions only
+
+
+--------------------------------------------------------------------------------
+FILES NOT MODIFIED
+--------------------------------------------------------------------------------
+
+    submission/gru_model.pth:
+       This file was NOT modified. However, the existing weights are NOT
+       COMPATIBLE with the new architecture (different hidden_size, LayerNorm,
+       residual connection, delta features). This file MUST be regenerated
+       by retraining the model with the new architecture.
+
+    submission/scaler.joblib:
+       This file was NOT modified. It can still be used as-is since the
+       StandardScaler logic has not changed.
+
+
+--------------------------------------------------------------------------------
+IMPORTANT: RETRAINING REQUIRED
+--------------------------------------------------------------------------------
+
+    The code changes above modify the MODEL ARCHITECTURE. The existing
+    gru_model.pth file was trained with the OLD architecture and will NOT
+    load correctly with the new code.
+
+    To use the new code, you must:
+    1. Update your training script (train.py) to match the new architecture
+    2. Retrain the model with the new hyperparameters
+    3. Save new weights as gru_model.pth (for GRU) or lstm_model.pth (for LSTM)
+    4. Optionally retrain with RobustScaler and save as scaler.joblib
+
+
+================================================================================
                               END OF DOCUMENTATION
 ================================================================================
 
 Document created : March 2026
 Document updated : March 2026 (added dataset, problem statement, and solution sections)
+Document updated : March 2026 (accuracy optimization — added LSTM, residual connections,
+                   LayerNorm, delta features, memory cleanup, hyperparameter tuning)
 This file provides a complete overview of the Wunder project. Share it with
 anyone who needs to understand the project structure, architecture, and logic.
